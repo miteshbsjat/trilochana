@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +19,7 @@ import (
 // --- Configuration & Constants ---
 
 const (
-	Version = "0.0.0"
+	Version = "0.4.0-go"
 )
 
 // Config holds command line arguments
@@ -63,12 +64,13 @@ func CalculateShannonEntropy(s string) float64 {
 
 // --- Pattern Definitions ---
 
-// patterns is the global map of regexes. We initialize it with defaults,
-// then merge external config into it.
+// patterns is the global map of regexes.
 var patterns = map[string]*regexp.Regexp{
-	// AWS
-	"AWS Access Key ID": regexp.MustCompile(`(?i)AKIA[0-9A-Z]{16}`),
-	"AWS Secret Key":    regexp.MustCompile(`(?i)(aws[_\s\-]?secret[_\s\-]?(access[_\s\-]?)?key)["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})["']?`),
+	// AWS Access Key ID (AKI...)
+	"AWS Access Key ID": regexp.MustCompile(`(?i)\bAKIA[0-9A-Z]{16}\b`),
+
+	// AWS Secret Key (Optional 'aws' prefix)
+	"AWS Secret Key": regexp.MustCompile(`(?i)((aws|s3)?[_\s\-]?)?secret[_\s\-]?(access[_\s\-]?)?key["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})["']?`),
 
 	// GitHub
 	"GitHub Token": regexp.MustCompile(`(ghp|gho|ghu|ghs|ghr)_[0-9A-Za-z]{36,}`),
@@ -89,14 +91,12 @@ var patterns = map[string]*regexp.Regexp{
 	"MySQL URL":    regexp.MustCompile(`mysql://[a-z0-9]+:[^@\s]+@[^\s]+`),
 	"Mongo URL":    regexp.MustCompile(`mongodb(\+srv)?://[a-z0-9]+:[^@\s]+@[^\s]+`),
 
-	// Generic
+	// Generic High Entropy Assignment
 	"Generic Secret Assignment": regexp.MustCompile(`(?i)(api[_\s\-]?key|secret|token|password|auth)["']?\s*[:=]\s*["']?([a-zA-Z0-9\-._~+/]{16,})["']?`),
 }
 
 // --- External Config Logic ---
 
-// LoadExternalPatterns reads a JSON file from ~/.config/trilochana/regex
-// and merges the patterns into the global map.
 func LoadExternalPatterns(verbose bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -107,8 +107,7 @@ func LoadExternalPatterns(verbose bool) {
 	}
 
 	configPath := filepath.Join(home, ".config", "trilochana", "regex.json")
-	
-	// Check if file exists
+
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		if verbose {
 			fmt.Printf("No external config found at %s, skipping.\n", configPath)
@@ -125,7 +124,6 @@ func LoadExternalPatterns(verbose bool) {
 	}
 	defer file.Close()
 
-	// Parse JSON: map[string]string -> "Pattern Name": "Regex String"
 	var externalPatterns map[string]string
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&externalPatterns); err != nil {
@@ -133,17 +131,13 @@ func LoadExternalPatterns(verbose bool) {
 		return
 	}
 
-	// Merge into global patterns
 	count := 0
 	for name, regexStr := range externalPatterns {
-		// Compile the regex
 		re, err := regexp.Compile(regexStr)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error compiling regex for '%s': %v\n", name, err)
 			continue
 		}
-		
-		// Add or Overwrite
 		patterns[name] = re
 		count++
 	}
@@ -151,6 +145,91 @@ func LoadExternalPatterns(verbose bool) {
 	if verbose {
 		fmt.Printf("Loaded %d patterns from %s\n", count, configPath)
 	}
+}
+
+// --- Trilochana Ignore Logic ---
+
+// TrilochanaIgnoreMatcher handles ignores for specific file:line pairs
+type TrilochanaIgnoreMatcher struct {
+	// ignoredLines maps "filepath:linenumber" string to true
+	ignoredLines map[string]bool
+	baseDir      string
+}
+
+// NewTrilochanaIgnoreMatcher loads .trilochanaignore from the scan path
+func NewTrilochanaIgnoreMatcher(rootPath string, verbose bool) *TrilochanaIgnoreMatcher {
+	matcher := &TrilochanaIgnoreMatcher{
+		ignoredLines: make(map[string]bool),
+		baseDir:      rootPath,
+	}
+
+	ignorePath := filepath.Join(rootPath, ".trilochanaignore")
+	file, err := os.Open(ignorePath)
+	if err != nil {
+		// File doesn't exist or isn't readable, just return empty matcher
+		return matcher
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	count := 0
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// Skip comments and empty lines
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Expected format: filename:linenumber
+		parts := strings.Split(line, ":")
+		if len(parts) < 2 {
+			continue
+		}
+
+		// Extract line number (last part)
+		lineStr := parts[len(parts)-1]
+		lineNumber, err := strconv.Atoi(lineStr)
+		if err != nil {
+			continue // Invalid line number
+		}
+
+		// Extract filename (everything before the last colon)
+		fileName := strings.Join(parts[:len(parts)-1], ":")
+		fileName = strings.TrimSpace(fileName)
+
+		// Normalize path to use OS separator and ensure it's clean
+		cleanPath := filepath.Clean(fileName)
+
+		// Key format: "path/to/file:42" (using OS separator)
+		key := fmt.Sprintf("%s:%d", cleanPath, lineNumber)
+		matcher.ignoredLines[key] = true
+		count++
+	}
+
+	if verbose && count > 0 {
+		fmt.Printf("Loaded %d ignore rules from .trilochanaignore\n", count)
+	}
+
+	return matcher
+}
+
+// IsIgnored checks if the specific file and line should be ignored
+func (m *TrilochanaIgnoreMatcher) IsIgnored(fullPath string, lineNumber int) bool {
+	if len(m.ignoredLines) == 0 {
+		return false
+	}
+
+	// Get relative path from baseDir to match the entries in .trilochanaignore
+	relPath, err := filepath.Rel(m.baseDir, fullPath)
+	if err != nil {
+		return false
+	}
+
+	// Clean the path to remove dot or similar constructs
+	cleanRelPath := filepath.Clean(relPath)
+
+	key := fmt.Sprintf("%s:%d", cleanRelPath, lineNumber)
+	return m.ignoredLines[key]
 }
 
 // --- GitIgnore Logic ---
@@ -246,7 +325,7 @@ func shouldSkipPath(path string, ignoreMatcher *GitIgnoreMatcher, useGitIgnore b
 	return false
 }
 
-func scanFile(path string, minEntropy float64) ([]Finding, error) {
+func scanFile(path string, minEntropy float64, trilochanaIgnore *TrilochanaIgnoreMatcher) ([]Finding, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -265,6 +344,11 @@ func scanFile(path string, minEntropy float64) ([]Finding, error) {
 		line := scanner.Text()
 
 		if len(line) > 2000 {
+			continue
+		}
+
+		// Check if this specific line is ignored via .trilochanaignore
+		if trilochanaIgnore != nil && trilochanaIgnore.IsIgnored(path, lineNumber) {
 			continue
 		}
 
@@ -320,12 +404,15 @@ func run() int {
 	LoadExternalPatterns(config.Verbose)
 
 	// 2. Setup GitIgnore
-	var ignoreMatcher *GitIgnoreMatcher
+	var gitIgnoreMatcher *GitIgnoreMatcher
 	if config.GitIgnore {
-		ignoreMatcher = NewGitIgnoreMatcher(config.Path)
+		gitIgnoreMatcher = NewGitIgnoreMatcher(config.Path)
 	}
 
-	// 3. Start Workers
+	// 3. Setup Trilochana Ignore
+	trilochanaIgnoreMatcher := NewTrilochanaIgnoreMatcher(config.Path, config.Verbose)
+
+	// 4. Start Workers
 	filesChan := make(chan string, 100)
 	resultsChan := make(chan []Finding, 100)
 	var wg sync.WaitGroup
@@ -335,7 +422,7 @@ func run() int {
 		go func() {
 			defer wg.Done()
 			for path := range filesChan {
-				findings, err := scanFile(path, config.MinEntropy)
+				findings, err := scanFile(path, config.MinEntropy, trilochanaIgnoreMatcher)
 				if err == nil && len(findings) > 0 {
 					resultsChan <- findings
 				}
@@ -343,7 +430,7 @@ func run() int {
 		}()
 	}
 
-	// 4. Collector
+	// 5. Collector
 	var allFindings []Finding
 	doneChan := make(chan bool)
 	go func() {
@@ -353,7 +440,7 @@ func run() int {
 		doneChan <- true
 	}()
 
-	// 5. Walk Files
+	// 6. Walk Files
 	startTime := time.Now()
 	count := 0
 
@@ -362,12 +449,12 @@ func run() int {
 			return nil
 		}
 		if info.IsDir() {
-			if shouldSkipPath(path, ignoreMatcher, config.GitIgnore) {
+			if shouldSkipPath(path, gitIgnoreMatcher, config.GitIgnore) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !info.Mode().IsRegular() || shouldSkipPath(path, ignoreMatcher, config.GitIgnore) {
+		if !info.Mode().IsRegular() || shouldSkipPath(path, gitIgnoreMatcher, config.GitIgnore) {
 			return nil
 		}
 
