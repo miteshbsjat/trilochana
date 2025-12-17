@@ -19,7 +19,7 @@ import (
 // --- Configuration & Constants ---
 
 const (
-	Version = "0.4.0-go"
+	Version = "0.5.0-go"
 )
 
 // Config holds command line arguments
@@ -64,35 +64,21 @@ func CalculateShannonEntropy(s string) float64 {
 
 // --- Pattern Definitions ---
 
-// patterns is the global map of regexes.
 var patterns = map[string]*regexp.Regexp{
-	// AWS Access Key ID (AKI...)
 	"AWS Access Key ID": regexp.MustCompile(`(?i)\bAKIA[0-9A-Z]{16}\b`),
-
-	// AWS Secret Key (Optional 'aws' prefix)
-	"AWS Secret Key": regexp.MustCompile(`(?i)((aws|s3)?[_\s\-]?)?secret[_\s\-]?(access[_\s\-]?)?key["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})["']?`),
-
-	// GitHub
-	"GitHub Token": regexp.MustCompile(`(ghp|gho|ghu|ghs|ghr)_[0-9A-Za-z]{36,}`),
-	"GitHub OAuth": regexp.MustCompile(`[0-9a-f]{40}`),
-
-	// Private Keys
-	"RSA Private Key":     regexp.MustCompile(`-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----`),
-	"SSH Private Key":     regexp.MustCompile(`-----BEGIN\s+OPENSSH\s+PRIVATE\s+KEY-----`),
-	"Generic Private Key": regexp.MustCompile(`-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----`),
-
-	// API Keys
-	"Stripe API Key": regexp.MustCompile(`(sk|pk)_(test|live)_[0-9A-Za-z]{24,}`),
-	"Slack Token":    regexp.MustCompile(`xox[baprs]-[0-9A-Za-z]{10,48}`),
-	"Google API Key": regexp.MustCompile(`AIza[0-9A-Za-z\-_]{35}`),
-
-	// Database
-	"Postgres URL": regexp.MustCompile(`postgres(ql)?://[a-z0-9]+:[^@\s]+@[^\s]+`),
-	"MySQL URL":    regexp.MustCompile(`mysql://[a-z0-9]+:[^@\s]+@[^\s]+`),
-	"Mongo URL":    regexp.MustCompile(`mongodb(\+srv)?://[a-z0-9]+:[^@\s]+@[^\s]+`),
-
-	// Generic High Entropy Assignment
-	"Generic Secret Assignment": regexp.MustCompile(`(?i)(api[_\s\-]?key|secret|token|password|auth)["']?\s*[:=]\s*["']?([a-zA-Z0-9\-._~+/]{16,})["']?`),
+	"AWS Secret Key":    regexp.MustCompile(`(?i)((aws|s3)?[_\s\-]?)?secret[_\s\-]?(access[_\s\-]?)?key["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})["']?`),
+	"GitHub Token":      regexp.MustCompile(`(ghp|gho|ghu|ghs|ghr)_[0-9A-Za-z]{36,}`),
+	"GitHub OAuth":      regexp.MustCompile(`[0-9a-f]{40}`),
+	"RSA Private Key":   regexp.MustCompile(`-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----`),
+	"SSH Private Key":   regexp.MustCompile(`-----BEGIN\s+OPENSSH\s+PRIVATE\s+KEY-----`),
+	"Generic Key":       regexp.MustCompile(`-----BEGIN\s+[A-Z\s]+PRIVATE\s+KEY-----`),
+	"Stripe API Key":    regexp.MustCompile(`(sk|pk)_(test|live)_[0-9A-Za-z]{24,}`),
+	"Slack Token":       regexp.MustCompile(`xox[baprs]-[0-9A-Za-z]{10,48}`),
+	"Google API Key":    regexp.MustCompile(`AIza[0-9A-Za-z\-_]{35}`),
+	"Postgres URL":      regexp.MustCompile(`postgres(ql)?://[a-z0-9]+:[^@\s]+@[^\s]+`),
+	"MySQL URL":         regexp.MustCompile(`mysql://[a-z0-9]+:[^@\s]+@[^\s]+`),
+	"Mongo URL":         regexp.MustCompile(`mongodb(\+srv)?://[a-z0-9]+:[^@\s]+@[^\s]+`),
+	"Generic Secret":    regexp.MustCompile(`(?i)(api[_\s\-]?key|secret|token|password|auth)["']?\s*[:=]\s*["']?([a-zA-Z0-9\-._~+/]{16,})["']?`),
 }
 
 // --- External Config Logic ---
@@ -149,24 +135,24 @@ func LoadExternalPatterns(verbose bool) {
 
 // --- Trilochana Ignore Logic ---
 
-// TrilochanaIgnoreMatcher handles ignores for specific file:line pairs
+// TrilochanaIgnoreMatcher matches file:line conditions
 type TrilochanaIgnoreMatcher struct {
-	// ignoredLines maps "filepath:linenumber" string to true
-	ignoredLines map[string]bool
+	// ignoredLines maps "filepath:linenumber" -> entropyThreshold
+	// If entropyThreshold is MaxFloat64, it's a hard ignore (ignores everything on that line).
+	// If foundEntropy > entropyThreshold, we DO NOT ignore (it's a new, stronger secret).
+	ignoredLines map[string]float64
 	baseDir      string
 }
 
-// NewTrilochanaIgnoreMatcher loads .trilochanaignore from the scan path
 func NewTrilochanaIgnoreMatcher(rootPath string, verbose bool) *TrilochanaIgnoreMatcher {
 	matcher := &TrilochanaIgnoreMatcher{
-		ignoredLines: make(map[string]bool),
+		ignoredLines: make(map[string]float64),
 		baseDir:      rootPath,
 	}
 
 	ignorePath := filepath.Join(rootPath, ".trilochanaignore")
 	file, err := os.Open(ignorePath)
 	if err != nil {
-		// File doesn't exist or isn't readable, just return empty matcher
 		return matcher
 	}
 	defer file.Close()
@@ -175,34 +161,52 @@ func NewTrilochanaIgnoreMatcher(rootPath string, verbose bool) *TrilochanaIgnore
 	count := 0
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		// Skip comments and empty lines
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 
-		// Expected format: filename:linenumber
 		parts := strings.Split(line, ":")
 		if len(parts) < 2 {
 			continue
 		}
 
-		// Extract line number (last part)
-		lineStr := parts[len(parts)-1]
+		// Parse Entropy (Optional 3rd part)
+		threshold := math.MaxFloat64 // Default: Hard ignore (Infinity)
+		
+		// If 3 parts, the last one might be entropy
+		// If 2 parts, parts[1] is line number
+		
+		var lineStr string
+		var fileName string
+
+		if len(parts) >= 3 {
+			// Try parsing the last part as entropy
+			entropyVal, err := strconv.ParseFloat(parts[len(parts)-1], 64)
+			if err == nil {
+				threshold = entropyVal
+				lineStr = parts[len(parts)-2]
+				fileName = strings.Join(parts[:len(parts)-2], ":")
+			} else {
+				// Fallback: maybe filename had a colon? Assume hard ignore
+				lineStr = parts[len(parts)-1]
+				fileName = strings.Join(parts[:len(parts)-1], ":")
+			}
+		} else {
+			// 2 parts: file:line
+			lineStr = parts[len(parts)-1]
+			fileName = strings.Join(parts[:len(parts)-1], ":")
+		}
+		
 		lineNumber, err := strconv.Atoi(lineStr)
 		if err != nil {
-			continue // Invalid line number
+			continue
 		}
 
-		// Extract filename (everything before the last colon)
-		fileName := strings.Join(parts[:len(parts)-1], ":")
 		fileName = strings.TrimSpace(fileName)
-
-		// Normalize path to use OS separator and ensure it's clean
 		cleanPath := filepath.Clean(fileName)
-
-		// Key format: "path/to/file:42" (using OS separator)
 		key := fmt.Sprintf("%s:%d", cleanPath, lineNumber)
-		matcher.ignoredLines[key] = true
+		
+		matcher.ignoredLines[key] = threshold
 		count++
 	}
 
@@ -213,23 +217,32 @@ func NewTrilochanaIgnoreMatcher(rootPath string, verbose bool) *TrilochanaIgnore
 	return matcher
 }
 
-// IsIgnored checks if the specific file and line should be ignored
-func (m *TrilochanaIgnoreMatcher) IsIgnored(fullPath string, lineNumber int) bool {
+// ShouldIgnore returns true if the finding should be ignored based on .trilochanaignore
+func (m *TrilochanaIgnoreMatcher) ShouldIgnore(fullPath string, lineNumber int, foundEntropy float64) bool {
 	if len(m.ignoredLines) == 0 {
 		return false
 	}
 
-	// Get relative path from baseDir to match the entries in .trilochanaignore
 	relPath, err := filepath.Rel(m.baseDir, fullPath)
 	if err != nil {
 		return false
 	}
 
-	// Clean the path to remove dot or similar constructs
 	cleanRelPath := filepath.Clean(relPath)
-
 	key := fmt.Sprintf("%s:%d", cleanRelPath, lineNumber)
-	return m.ignoredLines[key]
+	
+	threshold, exists := m.ignoredLines[key]
+	if !exists {
+		return false // Not in ignore list
+	}
+
+	// Logic: "do not ignore if that line record match entropy is > this_entropy"
+	// Therefore, ignore if foundEntropy <= threshold.
+	if foundEntropy > threshold {
+		return false // It's stronger than the ignore rule, report it!
+	}
+
+	return true // Ignore it
 }
 
 // --- GitIgnore Logic ---
@@ -347,11 +360,6 @@ func scanFile(path string, minEntropy float64, trilochanaIgnore *TrilochanaIgnor
 			continue
 		}
 
-		// Check if this specific line is ignored via .trilochanaignore
-		if trilochanaIgnore != nil && trilochanaIgnore.IsIgnored(path, lineNumber) {
-			continue
-		}
-
 		for name, regex := range patterns {
 			matches := regex.FindAllStringSubmatch(line, -1)
 			for _, match := range matches {
@@ -362,16 +370,24 @@ func scanFile(path string, minEntropy float64, trilochanaIgnore *TrilochanaIgnor
 
 				entropy := CalculateShannonEntropy(secretVal)
 
-				if entropy >= minEntropy {
-					findings = append(findings, Finding{
-						FilePath:    path,
-						LineNumber:  lineNumber,
-						LineContent: strings.TrimSpace(line),
-						PatternName: name,
-						MatchedText: secretVal,
-						Entropy:     entropy,
-					})
+				// 1. Check Global Filter
+				if entropy < minEntropy {
+					continue
 				}
+
+				// 2. Check Specific Line Ignore (with entropy check)
+				if trilochanaIgnore != nil && trilochanaIgnore.ShouldIgnore(path, lineNumber, entropy) {
+					continue
+				}
+
+				findings = append(findings, Finding{
+					FilePath:    path,
+					LineNumber:  lineNumber,
+					LineContent: strings.TrimSpace(line),
+					PatternName: name,
+					MatchedText: secretVal,
+					Entropy:     entropy,
+				})
 			}
 		}
 	}
@@ -400,19 +416,15 @@ func run() int {
 			Version, config.Path, config.GitIgnore, config.MinEntropy)
 	}
 
-	// 1. Load External Patterns
 	LoadExternalPatterns(config.Verbose)
 
-	// 2. Setup GitIgnore
 	var gitIgnoreMatcher *GitIgnoreMatcher
 	if config.GitIgnore {
 		gitIgnoreMatcher = NewGitIgnoreMatcher(config.Path)
 	}
 
-	// 3. Setup Trilochana Ignore
 	trilochanaIgnoreMatcher := NewTrilochanaIgnoreMatcher(config.Path, config.Verbose)
 
-	// 4. Start Workers
 	filesChan := make(chan string, 100)
 	resultsChan := make(chan []Finding, 100)
 	var wg sync.WaitGroup
@@ -430,7 +442,6 @@ func run() int {
 		}()
 	}
 
-	// 5. Collector
 	var allFindings []Finding
 	doneChan := make(chan bool)
 	go func() {
@@ -440,7 +451,6 @@ func run() int {
 		doneChan <- true
 	}()
 
-	// 6. Walk Files
 	startTime := time.Now()
 	count := 0
 
@@ -473,8 +483,6 @@ func run() int {
 	<-doneChan
 
 	duration := time.Since(startTime)
-
-	// --- Output ---
 
 	if config.Output != "" {
 		f, err := os.Create(config.Output)
