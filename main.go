@@ -18,7 +18,7 @@ import (
 // --- Configuration & Constants ---
 
 const (
-	Version = "0.2.0-go"
+	Version = "0.2.1-go"
 )
 
 // Config holds command line arguments
@@ -98,7 +98,6 @@ type GitIgnoreMatcher struct {
 	baseDir  string
 }
 
-// NewGitIgnoreMatcher loads .gitignore from the scan root if it exists
 func NewGitIgnoreMatcher(rootPath string) *GitIgnoreMatcher {
 	matcher := &GitIgnoreMatcher{
 		baseDir: rootPath,
@@ -107,7 +106,6 @@ func NewGitIgnoreMatcher(rootPath string) *GitIgnoreMatcher {
 	gitIgnorePath := filepath.Join(rootPath, ".gitignore")
 	file, err := os.Open(gitIgnorePath)
 	if err != nil {
-		// No .gitignore found or readable, return empty matcher
 		return matcher
 	}
 	defer file.Close()
@@ -123,43 +121,32 @@ func NewGitIgnoreMatcher(rootPath string) *GitIgnoreMatcher {
 	return matcher
 }
 
-// IsIgnored checks if a file path matches any gitignore pattern
 func (m *GitIgnoreMatcher) IsIgnored(path string) bool {
 	if len(m.patterns) == 0 {
 		return false
 	}
-
-	// Get relative path from the scan root
 	relPath, err := filepath.Rel(m.baseDir, path)
 	if err != nil {
 		return false
 	}
-	
-	// Normalize path separators for pattern matching
 	relPath = filepath.ToSlash(relPath)
 
 	for _, pattern := range m.patterns {
-		// Handle directory specific patterns (ending in /)
 		isDirPattern := strings.HasSuffix(pattern, "/")
 		cleanPattern := strings.TrimSuffix(pattern, "/")
 
-		// 1. Exact Match (e.g., "node_modules")
 		if relPath == cleanPattern || strings.HasPrefix(relPath, cleanPattern+"/") {
 			return true
 		}
 
-		// 2. Wildcard Match (e.g., "*.log")
 		matched, _ := filepath.Match(cleanPattern, filepath.Base(relPath))
 		if matched {
 			if !isDirPattern {
 				return true
 			}
-			// If it's a dir pattern, we must ensure we are inside that dir
-			// (Simple heuristic: filepath.Match matched the name, so check context if needed)
-			return true 
+			return true
 		}
 
-		// 3. Path Glob Match (e.g., "dist/*.js")
 		matchedFull, _ := filepath.Match(cleanPattern, relPath)
 		if matchedFull {
 			return true
@@ -170,11 +157,9 @@ func (m *GitIgnoreMatcher) IsIgnored(path string) bool {
 
 // --- Scanning Logic ---
 
-// shouldSkipPath checks system defaults + gitignore
 func shouldSkipPath(path string, ignoreMatcher *GitIgnoreMatcher, useGitIgnore bool) bool {
 	lowerPath := strings.ToLower(path)
-	
-	// 1. Built-in hardcoded ignores (always active)
+
 	ignoredDirs := []string{".git", ".idea", ".vscode", "node_modules", "vendor", "target", "dist", "build"}
 	for _, dir := range ignoredDirs {
 		if strings.Contains(lowerPath, string(os.PathSeparator)+dir+string(os.PathSeparator)) || strings.HasPrefix(lowerPath, dir+string(os.PathSeparator)) {
@@ -182,7 +167,6 @@ func shouldSkipPath(path string, ignoreMatcher *GitIgnoreMatcher, useGitIgnore b
 		}
 	}
 
-	// 2. Binary extensions
 	ext := filepath.Ext(lowerPath)
 	binaryExts := []string{".exe", ".dll", ".so", ".dylib", ".zip", ".tar", ".gz", ".png", ".jpg", ".jpeg", ".pdf", ".lock", ".bin"}
 	for _, bin := range binaryExts {
@@ -191,7 +175,6 @@ func shouldSkipPath(path string, ignoreMatcher *GitIgnoreMatcher, useGitIgnore b
 		}
 	}
 
-	// 3. Dynamic .gitignore check
 	if useGitIgnore && ignoreMatcher != nil {
 		if ignoreMatcher.IsIgnored(path) {
 			return true
@@ -210,8 +193,7 @@ func scanFile(path string, minEntropy float64) ([]Finding, error) {
 
 	var findings []Finding
 	scanner := bufio.NewScanner(file)
-	
-	// Increase buffer size for long lines
+
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
 
@@ -219,8 +201,8 @@ func scanFile(path string, minEntropy float64) ([]Finding, error) {
 	for scanner.Scan() {
 		lineNumber++
 		line := scanner.Text()
-		
-		if len(line) > 2000 { // Optimization: skip excessively long lines
+
+		if len(line) > 2000 {
 			continue
 		}
 
@@ -234,7 +216,6 @@ func scanFile(path string, minEntropy float64) ([]Finding, error) {
 
 				entropy := CalculateShannonEntropy(secretVal)
 
-				// --- MIN ENTROPY FILTER ---
 				if entropy >= minEntropy {
 					findings = append(findings, Finding{
 						FilePath:    path,
@@ -254,6 +235,12 @@ func scanFile(path string, minEntropy float64) ([]Finding, error) {
 // --- Main Execution ---
 
 func main() {
+	// We use a wrapper function 'run' so that defers (like closing files)
+	// execute properly before we exit with a specific status code.
+	os.Exit(run())
+}
+
+func run() int {
 	config := Config{}
 	flag.StringVar(&config.Path, "path", ".", "Path to scan")
 	flag.StringVar(&config.Format, "format", "text", "Output format (json, text)")
@@ -265,24 +252,19 @@ func main() {
 	flag.Parse()
 
 	if config.Verbose {
-		fmt.Printf("SecretScan %s | Path: %s | GitIgnore: %v | MinEntropy: %.2f\n", 
+		fmt.Printf("SecretScan %s | Path: %s | GitIgnore: %v | MinEntropy: %.2f\n",
 			Version, config.Path, config.GitIgnore, config.MinEntropy)
 	}
 
-	// Initialize GitIgnore Matcher
 	var ignoreMatcher *GitIgnoreMatcher
 	if config.GitIgnore {
 		ignoreMatcher = NewGitIgnoreMatcher(config.Path)
-		if config.Verbose && len(ignoreMatcher.patterns) > 0 {
-			fmt.Printf("Loaded %d patterns from .gitignore\n", len(ignoreMatcher.patterns))
-		}
 	}
 
 	filesChan := make(chan string, 100)
 	resultsChan := make(chan []Finding, 100)
 	var wg sync.WaitGroup
 
-	// Start Workers
 	for i := 0; i < config.Threads; i++ {
 		wg.Add(1)
 		go func() {
@@ -296,7 +278,6 @@ func main() {
 		}()
 	}
 
-	// Result Collector
 	var allFindings []Finding
 	doneChan := make(chan bool)
 	go func() {
@@ -306,26 +287,19 @@ func main() {
 		doneChan <- true
 	}()
 
-	// File Walker
 	startTime := time.Now()
 	count := 0
-	
+
 	err := filepath.Walk(config.Path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
 		if info.IsDir() {
-			// Check ignores for directory
 			if shouldSkipPath(path, ignoreMatcher, config.GitIgnore) {
-				if config.Verbose {
-					fmt.Printf("[Skip Dir] %s\n", path)
-				}
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		
-		// Check ignores for file
 		if !info.Mode().IsRegular() || shouldSkipPath(path, ignoreMatcher, config.GitIgnore) {
 			return nil
 		}
@@ -346,13 +320,16 @@ func main() {
 
 	duration := time.Since(startTime)
 
-	// Output
+	// --- Output Handling ---
+
 	if config.Output != "" {
 		f, err := os.Create(config.Output)
 		if err != nil {
 			fmt.Printf("Error creating output: %v\n", err)
-			os.Exit(1)
+			return 1 // Exit 1 on file error
 		}
+		// Because we are inside 'run', this defer will execute when 'run' returns,
+		// ensuring the file is closed/flushed before os.Exit() is called in main.
 		defer f.Close()
 		os.Stdout = f
 	}
@@ -375,4 +352,11 @@ func main() {
 			fmt.Printf("Summary: Scanned %d files in %v\n", count, duration)
 		}
 	}
+
+	// --- Exit Code Logic ---
+	// Return 1 if secrets were found, 0 otherwise
+	if len(allFindings) > 0 {
+		return 1
+	}
+	return 0
 }
