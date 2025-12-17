@@ -18,7 +18,7 @@ import (
 // --- Configuration & Constants ---
 
 const (
-	Version = "0.3.0-go"
+	Version = "0.0.0"
 )
 
 // Config holds command line arguments
