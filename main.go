@@ -18,7 +18,7 @@ import (
 // --- Configuration & Constants ---
 
 const (
-	Version = "0.2.1-go"
+	Version = "0.3.0-go"
 )
 
 // Config holds command line arguments
@@ -63,6 +63,8 @@ func CalculateShannonEntropy(s string) float64 {
 
 // --- Pattern Definitions ---
 
+// patterns is the global map of regexes. We initialize it with defaults,
+// then merge external config into it.
 var patterns = map[string]*regexp.Regexp{
 	// AWS
 	"AWS Access Key ID": regexp.MustCompile(`(?i)AKIA[0-9A-Z]{16}`),
@@ -89,6 +91,66 @@ var patterns = map[string]*regexp.Regexp{
 
 	// Generic
 	"Generic Secret Assignment": regexp.MustCompile(`(?i)(api[_\s\-]?key|secret|token|password|auth)["']?\s*[:=]\s*["']?([a-zA-Z0-9\-._~+/]{16,})["']?`),
+}
+
+// --- External Config Logic ---
+
+// LoadExternalPatterns reads a JSON file from ~/.config/trilochana/regex
+// and merges the patterns into the global map.
+func LoadExternalPatterns(verbose bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		if verbose {
+			fmt.Printf("Warning: Could not determine home directory: %v\n", err)
+		}
+		return
+	}
+
+	configPath := filepath.Join(home, ".config", "trilochana", "regex.json")
+	
+	// Check if file exists
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		if verbose {
+			fmt.Printf("No external config found at %s, skipping.\n", configPath)
+		}
+		return
+	}
+
+	file, err := os.Open(configPath)
+	if err != nil {
+		if verbose {
+			fmt.Printf("Warning: Could not open config file: %v\n", err)
+		}
+		return
+	}
+	defer file.Close()
+
+	// Parse JSON: map[string]string -> "Pattern Name": "Regex String"
+	var externalPatterns map[string]string
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&externalPatterns); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing JSON from %s: %v\n", configPath, err)
+		return
+	}
+
+	// Merge into global patterns
+	count := 0
+	for name, regexStr := range externalPatterns {
+		// Compile the regex
+		re, err := regexp.Compile(regexStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error compiling regex for '%s': %v\n", name, err)
+			continue
+		}
+		
+		// Add or Overwrite
+		patterns[name] = re
+		count++
+	}
+
+	if verbose {
+		fmt.Printf("Loaded %d patterns from %s\n", count, configPath)
+	}
 }
 
 // --- GitIgnore Logic ---
@@ -235,8 +297,6 @@ func scanFile(path string, minEntropy float64) ([]Finding, error) {
 // --- Main Execution ---
 
 func main() {
-	// We use a wrapper function 'run' so that defers (like closing files)
-	// execute properly before we exit with a specific status code.
 	os.Exit(run())
 }
 
@@ -256,11 +316,16 @@ func run() int {
 			Version, config.Path, config.GitIgnore, config.MinEntropy)
 	}
 
+	// 1. Load External Patterns
+	LoadExternalPatterns(config.Verbose)
+
+	// 2. Setup GitIgnore
 	var ignoreMatcher *GitIgnoreMatcher
 	if config.GitIgnore {
 		ignoreMatcher = NewGitIgnoreMatcher(config.Path)
 	}
 
+	// 3. Start Workers
 	filesChan := make(chan string, 100)
 	resultsChan := make(chan []Finding, 100)
 	var wg sync.WaitGroup
@@ -278,6 +343,7 @@ func run() int {
 		}()
 	}
 
+	// 4. Collector
 	var allFindings []Finding
 	doneChan := make(chan bool)
 	go func() {
@@ -287,6 +353,7 @@ func run() int {
 		doneChan <- true
 	}()
 
+	// 5. Walk Files
 	startTime := time.Now()
 	count := 0
 
@@ -320,16 +387,14 @@ func run() int {
 
 	duration := time.Since(startTime)
 
-	// --- Output Handling ---
+	// --- Output ---
 
 	if config.Output != "" {
 		f, err := os.Create(config.Output)
 		if err != nil {
 			fmt.Printf("Error creating output: %v\n", err)
-			return 1 // Exit 1 on file error
+			return 1
 		}
-		// Because we are inside 'run', this defer will execute when 'run' returns,
-		// ensuring the file is closed/flushed before os.Exit() is called in main.
 		defer f.Close()
 		os.Stdout = f
 	}
@@ -353,8 +418,6 @@ func run() int {
 		}
 	}
 
-	// --- Exit Code Logic ---
-	// Return 1 if secrets were found, 0 otherwise
 	if len(allFindings) > 0 {
 		return 1
 	}
