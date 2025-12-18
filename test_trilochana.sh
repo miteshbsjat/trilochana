@@ -9,6 +9,8 @@ TEST_ENV="$BASE_DIR"
 TEST_DIR="$TEST_ENV/tests"
 # Config directory for external regex
 CONFIG_DIR="$HOME/.config/trilochana"
+REGEX_FILE="$CONFIG_DIR/regex.json"
+BACKUP_FILE="$CONFIG_DIR/regex.json.bak"
 
 # Colors
 GREEN='\033[0;32m'
@@ -120,20 +122,71 @@ fi
 # TEST 6: Custom Regex Config
 # This uses the global home dir config, which works regardless of scan path
 mkdir -p "$CONFIG_DIR"
-echo '{ "TestPattern": "TEST-[0-9]{10}" }' > "$CONFIG_DIR/regex.json"
+
+# 1. Check if config exists and back it up
+if [ -f "$REGEX_FILE" ]; then
+    cp "$REGEX_FILE" "$BACKUP_FILE"
+    
+    # 2. Merge existing config with test pattern using a temporary Go script
+    # This avoids dependency on 'jq' and ensures safe JSON handling
+    cat <<EOF > merge_config.go
+package main
+import (
+	"encoding/json"
+	"os"
+)
+func main() {
+	filePath := "$REGEX_FILE"
+	content, _ := os.ReadFile(filePath)
+	var data map[string]string
+	
+	// Unmarshal existing data
+	if len(content) > 0 {
+		json.Unmarshal(content, &data)
+	}
+	if data == nil {
+		data = make(map[string]string)
+	}
+	
+	// Add/Overwrite Test Pattern
+	data["TestPattern"] = "TEST-[0-9a-zA-Z]{10}"
+	
+	// Write back
+	output, _ := json.MarshalIndent(data, "", "  ")
+	os.WriteFile(filePath, output, 0644)
+}
+EOF
+    go run merge_config.go
+    rm merge_config.go
+else
+    # File doesn't exist, create it new
+    echo '{ "TestPattern": "TEST-[0-9A-Za-z]{10}" }' > "$REGEX_FILE"
+fi
+
+# 3. Create test file matching the pattern
 echo "TEST-1234567890" > "tests/custom_regex.txt"
 
-if ./trilochana --path tests | grep -q "TestPattern"; then
+# 4. Run the test
+if [ $(./trilochana --path tests | grep -c "TestPattern") -eq 1 ]; then
     echo -e "${GREEN}PASS:${NC} Custom Regex Config"
 else
     echo -e "${RED}FAIL:${NC} Custom Regex Config"
 fi
+# ---------------------------------------------------------
 
 # Cleanup
 cd "$START_DIR"
-#rm -rf "$TEST_ENV"
-# Optional: remove the temp config if you want to clean up completely
-# rm "$CONFIG_DIR/regex.json"
+# rm -rf "$TEST_ENV"
+
+# Restore original config
+if [ -f "$BACKUP_FILE" ]; then
+    mv "$BACKUP_FILE" "$REGEX_FILE"
+    # echo "Restored original regex.json"
+elif [ -f "$REGEX_FILE" ]; then
+    # If we created it fresh and no backup exists, remove it to leave system clean
+    rm "$REGEX_FILE"
+    # echo "Removed test regex.json"
+fi
 
 echo "----------------------------------------"
 echo "Tests Complete."
