@@ -172,10 +172,10 @@ func NewTrilochanaIgnoreMatcher(rootPath string, verbose bool) *TrilochanaIgnore
 
 		// Parse Entropy (Optional 3rd part)
 		threshold := math.MaxFloat64 // Default: Hard ignore (Infinity)
-		
+
 		// If 3 parts, the last one might be entropy
 		// If 2 parts, parts[1] is line number
-		
+
 		var lineStr string
 		var fileName string
 
@@ -196,7 +196,7 @@ func NewTrilochanaIgnoreMatcher(rootPath string, verbose bool) *TrilochanaIgnore
 			lineStr = parts[len(parts)-1]
 			fileName = strings.Join(parts[:len(parts)-1], ":")
 		}
-		
+
 		lineNumber, err := strconv.Atoi(lineStr)
 		if err != nil {
 			continue
@@ -205,7 +205,7 @@ func NewTrilochanaIgnoreMatcher(rootPath string, verbose bool) *TrilochanaIgnore
 		fileName = strings.TrimSpace(fileName)
 		cleanPath := filepath.Clean(fileName)
 		key := fmt.Sprintf("%s:%d", cleanPath, lineNumber)
-		
+
 		matcher.ignoredLines[key] = threshold
 		count++
 	}
@@ -230,7 +230,7 @@ func (m *TrilochanaIgnoreMatcher) ShouldIgnore(fullPath string, lineNumber int, 
 
 	cleanRelPath := filepath.Clean(relPath)
 	key := fmt.Sprintf("%s:%d", cleanRelPath, lineNumber)
-	
+
 	threshold, exists := m.ignoredLines[key]
 	if !exists {
 		return false // Not in ignore list
