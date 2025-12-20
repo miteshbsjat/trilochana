@@ -139,6 +139,70 @@ Trilochana comes pre-configured to detect:
 * Database Connection Strings (Postgres, MySQL, Mongo)
 * Generic "high entropy" assignments (e.g., `api_key = "..."`)
 
+---
+
+## 🚀 Pre-commit Integration
+
+Trilochana supports [pre-commit](https://pre-commit.com/), allowing you to automate security scans every time you commit code.
+
+To use Trilochana with pre-commit, add the following configuration to your `.pre-commit-config.yaml` file:
+
+```yaml
+repos:
+  # Standard hooks for code hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v3.2.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+
+  # Trilochana local hook for secret scanning
+  - repo: local
+    hooks:
+      - id: secretscan
+        name: Secret Scanning
+        entry: trilochana -min-entropy 4.2 git file://. --since-commit HEAD --only-verified --fail
+        language: system
+        stages: [pre-commit, pre-push]
+        pass_filenames: false
+
+```
+
+---
+
+### 🛠 Configuration Details
+
+The Trilochana hook used in the example above performs the following actions:
+
+* **`-min-entropy 4.2`**: Flags any strings with an entropy score higher than 4.2 (common for encrypted keys or hashes).
+* **`--since-commit HEAD`**: Scans changes introduced in the current session.
+* **`--only-verified`**: Reduces noise by only reporting high-confidence matches.
+* **`--fail`**: Ensures the commit process stops if a secret is detected.
+
+### Requirements
+
+To use the local hook, ensure that the `trilochana` binary is installed on your system and available in your `$PATH`.
+
+---
+
+### 📖 How to Install Pre-commit
+
+If you haven't installed the pre-commit framework yet, you can do so via pip:
+
+```bash
+pip install pre-commit
+
+```
+
+Then, install the git hook scripts:
+
+```bash
+pre-commit install
+
+```
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please submit a Pull Request or open an issue for bug reports.
