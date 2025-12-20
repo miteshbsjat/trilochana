@@ -1,5 +1,7 @@
 # Trilochana 👁️👁️👁️
 
+![TriLochana](docs/images/trilochana.png)
+
 **Trilochana** (Sanskrit for "Three-eyed", implying all-seeing) is a blazing-fast, concurrent secret scanning tool written in Go. It helps developers detect hardcoded secrets, API keys, and credentials in their codebase before they are committed to version control.
 
 It features parallel file scanning, entropy-based filtering, and flexible ignore mechanisms (including `.gitignore` and a custom `.trilochanaignore`).
