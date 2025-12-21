@@ -42,7 +42,7 @@ docker run --rm $HOME/.config/trilochana/regex.json:/root/.config/trilochana/reg
 
 ### 🔍 Key Design Decisions
 
-* **Golang Version**: I selected `golang:1.24-alpine` to match the `go 1.24.5` directive found in your `go.mod` file.
+* **Golang Version**: `golang:1.24-alpine` is selected to match the `go 1.24.5` directive given in `go.mod` file.
 * **Static Linking**: The `CGO_ENABLED=0` flag is used during the build. This ensures the binary does not rely on external C libraries, making it perfectly safe to run in a stripped-down Alpine or even Scratch container.
 * **Stripping Debug Info**: The `-ldflags="-s -w"` reduces the final binary size by removing symbol tables and DWARF debug information.
 * **Volume Mount**: The default `CMD` points to `/scan`, encouraging the standard Docker pattern of mounting your source code volume to that specific path.
