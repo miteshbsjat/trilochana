@@ -17,7 +17,7 @@ Since Trilochana is a CLI tool designed to scan files, you must mount the direct
 To scan your current directory:
 
 ```bash
-docker run --rm -v "$(pwd):/scan" miteshsjat/trilochana
+docker run --rm -it -v "$(pwd):/scan" miteshsjat/trilochana
 
 ```
 
@@ -26,18 +26,34 @@ You can override the default `CMD` to pass specific flags (like `--min-entropy` 
 
 ```bash
 # Example: Scan with JSON output and custom entropy
-docker run --rm -v "$(pwd):/scan" miteshsjat/trilochana \
+docker run --rm -it -v "$(pwd):/scan" miteshsjat/trilochana \
   --path /scan --format json --min-entropy 4.5
+
 ```
 
-**4. Pass Custom Regex**
-You can add custom `regex`es for more keys/secrets finding.
+**4. Pass Custom Regex Configuration**
+You can provide custom regex patterns in two ways: mounting to the default global location or using the specific `--config` argument.
+
+**Option A: Mount to Default Location** (Global Config)
+Mount your local config to `/root/.config/trilochana/regex.json`. This is loaded automatically.
 
 ```bash
-# Example: Scan with more regex, JSON output and custom entropy
-docker run --rm $HOME/.config/trilochana/regex.json:/root/.config/trilochana/regex.json \
-  -v "$(pwd):/scan" miteshsjat/trilochana \
-  --path /scan --format json --min-entropy 4.5
+docker run --rm -it -v "$HOME/.config/trilochana/regex.json:/root/.config/trilochana/regex.json" \
+  -v "$(pwd):/scan" miteshsjat/trilochana
+
+```
+
+**Option B: Use `--config` Argument** (Project Specific)
+Mount your specific config file to a path inside the container and point Trilochana to it.
+
+```bash
+# Mount local 'custom-secrets.json' to '/custom-secrets.json' inside container
+docker run --rm -it \
+  -v "$(pwd)/custom-secrets.json:/custom-secrets.json" \
+  -v "$(pwd):/scan" \
+  miteshsjat/trilochana \
+  --path /scan --config /custom-secrets.json
+
 ```
 
 ### 🔍 Key Design Decisions
@@ -46,4 +62,3 @@ docker run --rm $HOME/.config/trilochana/regex.json:/root/.config/trilochana/reg
 * **Static Linking**: The `CGO_ENABLED=0` flag is used during the build. This ensures the binary does not rely on external C libraries, making it perfectly safe to run in a stripped-down Alpine or even Scratch container.
 * **Stripping Debug Info**: The `-ldflags="-s -w"` reduces the final binary size by removing symbol tables and DWARF debug information.
 * **Volume Mount**: The default `CMD` points to `/scan`, encouraging the standard Docker pattern of mounting your source code volume to that specific path.
-
