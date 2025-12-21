@@ -31,6 +31,7 @@ type Config struct {
 	Threads    int
 	Verbose    bool
 	GitIgnore  bool
+	ConfigFile string
 }
 
 // Finding represents a detected secret
@@ -83,29 +84,20 @@ var patterns = map[string]*regexp.Regexp{
 
 // --- External Config Logic ---
 
-func LoadExternalPatterns(verbose bool) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		if verbose {
-			fmt.Printf("Warning: Could not determine home directory: %v\n", err)
+// loadConfigFile is a helper to read a JSON file and update the global patterns map
+func loadConfigFile(path string, verbose bool, required bool) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if required {
+			fmt.Fprintf(os.Stderr, "Error: Specified config file not found: %s\n", path)
+		} else if verbose {
+			fmt.Printf("No external config found at %s, skipping.\n", path)
 		}
 		return
 	}
 
-	configPath := filepath.Join(home, ".config", "trilochana", "regex.json")
-
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		if verbose {
-			fmt.Printf("No external config found at %s, skipping.\n", configPath)
-		}
-		return
-	}
-
-	file, err := os.Open(configPath)
+	file, err := os.Open(path)
 	if err != nil {
-		if verbose {
-			fmt.Printf("Warning: Could not open config file: %v\n", err)
-		}
+		fmt.Fprintf(os.Stderr, "Warning: Could not open config file %s: %v\n", path, err)
 		return
 	}
 	defer file.Close()
@@ -113,7 +105,7 @@ func LoadExternalPatterns(verbose bool) {
 	var externalPatterns map[string]string
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&externalPatterns); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing JSON from %s: %v\n", configPath, err)
+		fmt.Fprintf(os.Stderr, "Error parsing JSON from %s: %v\n", path, err)
 		return
 	}
 
@@ -121,15 +113,36 @@ func LoadExternalPatterns(verbose bool) {
 	for name, regexStr := range externalPatterns {
 		re, err := regexp.Compile(regexStr)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error compiling regex for '%s': %v\n", name, err)
+			fmt.Fprintf(os.Stderr, "Error compiling regex for '%s' in %s: %v\n", name, path, err)
 			continue
 		}
+		// This assignment overrides existing patterns with the same name
 		patterns[name] = re
 		count++
 	}
 
 	if verbose {
-		fmt.Printf("Loaded %d patterns from %s\n", count, configPath)
+		fmt.Printf("Loaded %d patterns from %s\n", count, path)
+	}
+}
+
+func LoadExternalPatterns(customConfigPath string, verbose bool) {
+	// 1. Load Default Config (~/.config/trilochana/regex.json)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		if verbose {
+			fmt.Printf("Warning: Could not determine home directory: %v\n", err)
+		}
+	} else {
+		defaultConfigPath := filepath.Join(home, ".config", "trilochana", "regex.json")
+		// Not required, only load if exists
+		loadConfigFile(defaultConfigPath, verbose, false)
+	}
+
+	// 2. Load Custom Config (if provided via CLI)
+	// This runs second, so any collisions here will overwrite the default config patterns
+	if customConfigPath != "" {
+		loadConfigFile(customConfigPath, verbose, true)
 	}
 }
 
@@ -409,6 +422,7 @@ func run() int {
 	flag.BoolVar(&config.GitIgnore, "git-ignore", true, "Honor .gitignore files")
 	flag.IntVar(&config.Threads, "threads", 8, "Concurrent threads")
 	flag.BoolVar(&config.Verbose, "verbose", false, "Verbose logging")
+	flag.StringVar(&config.ConfigFile, "config", "", "Path to custom regex configuration file")
 	flag.Parse()
 
 	if config.Verbose {
@@ -416,7 +430,7 @@ func run() int {
 			Version, config.Path, config.GitIgnore, config.MinEntropy)
 	}
 
-	LoadExternalPatterns(config.Verbose)
+	LoadExternalPatterns(config.ConfigFile, config.Verbose)
 
 	var gitIgnoreMatcher *GitIgnoreMatcher
 	if config.GitIgnore {
