@@ -13,7 +13,7 @@ It features parallel file scanning, entropy-based filtering, and flexible ignore
 * **🛡️ Ignore Systems**:
     * **`.gitignore`**: Automatically respects your project's existing ignore rules.
     * **`.trilochanaignore`**: Fine-grained ignoring of specific file/line combinations, with optional entropy thresholds.
-* **🔧 Customizable Patterns**: Extend the built-in regex library with your own JSON configuration file.
+* **🔧 Customizable Patterns**: Extend the built-in regex library with your own JSON configuration file or load project-specific rules via CLI.
 * **📊 Output Formats**: Supports human-readable text output and machine-readable JSON for CI/CD pipelines.
 
 ## 📦 Installation
@@ -24,7 +24,7 @@ It features parallel file scanning, entropy-based filtering, and flexible ignore
 
 ```bash
 # Clone the repository
-git clone https://github.com/miteshbsjat/trilochana.git
+git clone [https://github.com/miteshbsjat/trilochana.git](https://github.com/miteshbsjat/trilochana.git)
 cd trilochana
 
 # Initialize module (if not already done)
@@ -36,8 +36,8 @@ go build -o trilochana main.go
 
 # (Optional) Move to your path
 sudo mv trilochana /usr/local/bin/
-```
 
+```
 
 ## 🚀 Usage
 
@@ -53,6 +53,7 @@ trilochana
 | Flag | Description | Default |
 | --- | --- | --- |
 | `--path` | Directory path to scan | `.` (current dir) |
+| `--config` | Path to custom regex configuration file. Overrides default config if collisions occur. | `""` |
 | `--min-entropy` | Minimum Shannon entropy threshold. Matches below this are ignored. | `3.0` |
 | `--git-ignore` | Honor `.gitignore` files. Set to `false` to scan everything. | `true` |
 | `--format` | Output format: `text` or `json`. | `text` |
@@ -66,6 +67,13 @@ trilochana
 
 ```bash
 trilochana --path /path/to/project --min-entropy 4.5
+
+```
+
+**Load a project-specific regex config:**
+
+```bash
+trilochana --config ./custom-secrets.json
 
 ```
 
@@ -87,8 +95,13 @@ trilochana --git-ignore=false
 
 ### 1. Custom Regex Patterns
 
-You can add your own secret detection patterns without recompiling.
-Create a file at `~/.config/trilochana/regex.json`:
+Trilochana allows you to extend or override the built-in detection patterns. The tool loads configurations in the following priority order (last loaded wins):
+
+1. **Built-in Patterns**: (AWS, GitHub, Stripe, etc.)
+2. **Global Config**: `~/.config/trilochana/regex.json` (if present)
+3. **CLI Config**: File specified via `--config <path>` (if provided)
+
+To add patterns, create a JSON file (e.g., `regex.json`):
 
 ```json
 {
@@ -98,7 +111,7 @@ Create a file at `~/.config/trilochana/regex.json`:
 
 ```
 
-*Note: These will merge with (or override) the built-in patterns.*
+*Note: If a pattern name in your JSON matches a built-in pattern (e.g., "AWS Access Key ID"), the built-in regex will be replaced by your custom version.*
 
 ### 2. Ignoring False Positives (`.trilochanaignore`)
 
@@ -107,12 +120,12 @@ Create a `.trilochanaignore` file in the root of your scan path to whitelist spe
 **Format:** `relative_path:line_number[:max_entropy]`
 
 * **Hard Ignore**: `file:line`
-  * Ignores *any* match on that line, regardless of entropy.
+* Ignores *any* match on that line, regardless of entropy.
 
 
 * **Entropy Threshold Ignore**: `file:line:entropy`
-  * Ignores the match *only if* its entropy is **less than or equal to** the specified value.
-  * If a new secret with *higher* entropy appears on that line, it will trigger an alert.
+* Ignores the match *only if* its entropy is **less than or equal to** the specified value.
+* If a new secret with *higher* entropy appears on that line, it will trigger an alert.
 
 
 
@@ -150,7 +163,7 @@ To use Trilochana with pre-commit, add the following configuration to your `.pre
 ```yaml
 repos:
   # Standard hooks for code hygiene
-  - repo: https://github.com/pre-commit/pre-commit-hooks
+  - repo: [https://github.com/pre-commit/pre-commit-hooks](https://github.com/pre-commit/pre-commit-hooks)
     rev: v3.2.0
     hooks:
       - id: trailing-whitespace
@@ -201,6 +214,7 @@ Then, install the git hook scripts:
 pre-commit install
 
 ```
+
 ---
 
 ## Using `trilochana` with CI/CD using docker container
