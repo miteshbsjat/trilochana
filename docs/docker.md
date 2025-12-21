@@ -30,6 +30,16 @@ docker run --rm -v "$(pwd):/scan" miteshsjat/trilochana \
   --path /scan --format json --min-entropy 4.5
 ```
 
+**4. Pass Custom Regex**
+You can add custom `regex`es for more keys/secrets finding.
+
+```bash
+# Example: Scan with more regex, JSON output and custom entropy
+docker run --rm $HOME/.config/trilochana/regex.json:/root/.config/trilochana/regex.json \
+  -v "$(pwd):/scan" miteshsjat/trilochana \
+  --path /scan --format json --min-entropy 4.5
+```
+
 ### 🔍 Key Design Decisions
 
 * **Golang Version**: I selected `golang:1.24-alpine` to match the `go 1.24.5` directive found in your `go.mod` file.
