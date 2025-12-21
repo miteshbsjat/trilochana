@@ -203,6 +203,12 @@ pre-commit install
 ```
 ---
 
+## Using `trilochana` with CI/CD using docker container
+
+This [document](docs/docker.md) shows how to use trilochana docker image on local machine or CI/CD stage.
+
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please submit a Pull Request or open an issue for bug reports.
