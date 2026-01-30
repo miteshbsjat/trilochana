@@ -3,3 +3,4 @@ temp.txt
 .trilochanaignore
 tests
 dockerignore
+.attic
