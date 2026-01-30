@@ -501,6 +501,10 @@ func run() int {
                     for _, s := range filtered {
                         // Convert relative COPY paths to absolute/clean paths for the scanner
                         fullSrcPath := filepath.Join(ctxDir, s)
+						// Logging for verbose mode
+						if config.Verbose {
+							fmt.Printf("Queuing Docker source for scan: %s\n", fullSrcPath)
+						}
                         dockerSources[fullSrcPath] = true
                     }
                     dockerMutex.Unlock()
