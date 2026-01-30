@@ -203,6 +203,103 @@ func splitDockerArgs(s string) ([]string, error) {
     return parts, nil
 }
 
+// ---------- 1. Docker‑ignore matcher (clone of GitIgnoreMatcher) ----------
+type DockerIgnoreMatcher struct {
+    patterns []string
+    baseDir  string
+}
+
+// NewDockerIgnoreMatcher builds a matcher from <contextDir>/.dockerignore.
+// If the file does not exist we return a matcher with an empty pattern list
+// (i.e. nothing will be ignored).
+func NewDockerIgnoreMatcher(contextDir string) (*DockerIgnoreMatcher, error) {
+    m := &DockerIgnoreMatcher{baseDir: contextDir}
+    path := filepath.Join(contextDir, ".dockerignore")
+
+    f, err := os.Open(path)
+    if err != nil {
+        // No .dockerignore → treat as empty list, not a fatal error
+        if os.IsNotExist(err) {
+            return m, nil
+        }
+        return nil, err
+    }
+    defer f.Close()
+
+    scanner := bufio.NewScanner(f)
+    for scanner.Scan() {
+        line := strings.TrimSpace(scanner.Text())
+        if line == "" || strings.HasPrefix(line, "#") {
+            continue
+        }
+        m.patterns = append(m.patterns, line)
+    }
+    return m, scanner.Err()
+}
+
+// IsIgnored reports true if relPath (relative to the context) matches any
+// .dockerignore pattern.  The matching rules are the same as Git‑ignore:
+// * trailing “/” means “directory only”
+// * leading “/” is anchored to the context root
+// * “**” works as a wildcard for any number of path components
+func (m *DockerIgnoreMatcher) IsIgnored(absPath string) bool {
+    if len(m.patterns) == 0 {
+        return false
+    }
+    rel, err := filepath.Rel(m.baseDir, absPath)
+    if err != nil {
+        return false
+    }
+    rel = filepath.ToSlash(rel) // Docker always uses forward slashes
+
+    for _, pat := range m.patterns {
+        // Convert Docker‑ignore pattern to a Go filepath.Match pattern.
+        // The simplest way is to let filepath.Match handle *, ?, and **.
+        // We also need to treat a leading '/' as anchored to the root.
+        p := pat
+        if strings.HasPrefix(p, "/") {
+            p = strings.TrimPrefix(p, "/")
+        }
+        // "**" in Docker‑ignore works like "**" in Go's Match, so we keep it.
+        // Trailing '/' means “directory only” – we just match the path
+        // and later let the caller decide whether it is a dir.
+        matched, _ := filepath.Match(p, rel)
+        if matched {
+            return true
+        }
+    }
+    return false
+}
+
+// ---------- 2. Helper that filters the source list ----------
+func FilterDockerCopySources(sources []string, contextDir string) ([]string, error) {
+    matcher, err := NewDockerIgnoreMatcher(contextDir)
+    if err != nil {
+        return nil, fmt.Errorf("reading .dockerignore: %w", err)
+    }
+    if len(matcher.patterns) == 0 {
+        // No .dockerignore → nothing to filter
+        return sources, nil
+    }
+
+    var filtered []string
+    for _, src := range sources {
+        // src may be relative (e.g. "src/") or absolute (e.g. "/builder/out/").
+        // Docker treats a leading '/' as relative to the build context,
+        // so we strip it before checking.
+        clean := strings.TrimPrefix(src, "/")
+        abs := filepath.Join(contextDir, clean)
+
+        if matcher.IsIgnored(abs) {
+            // Skip – it is excluded by .dockerignore
+            continue
+        }
+        filtered = append(filtered, src)
+    }
+    return filtered, nil
+}
+
+
 func main() {
     // path := "./Dockerfile"
     path := "./go.mod"
@@ -218,7 +315,7 @@ func main() {
         fmt.Println(path, "does NOT look like a Dockerfile")
     }
 
-	// ---------------
+	// 1. Parse the Dockerfile
 	sources, err := ParseDockerCopy("./Dockerfile")
     if err != nil {
         log.Fatalf("error parsing Dockerfile: %v", err)
@@ -226,5 +323,18 @@ func main() {
     fmt.Println("Sources that will be copied into the image:")
     for _, src := range sources {
         fmt.Println(" -", src)
+    }
+
+	// 2. Apply .dockerignore filtering (assuming the build context is the
+    //    directory that contains the Dockerfile)
+    ctxDir := "." // or whatever directory you pass to `docker build`
+    final, err := FilterDockerCopySources(sources, ctxDir)
+    if err != nil {
+        log.Fatalf("ignore filter error: %v", err)
+    }
+
+    fmt.Println("Sources that will actually be copied:")
+    for _, s := range final {
+        fmt.Println(" -", s)
     }
 }
