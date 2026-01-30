@@ -456,7 +456,7 @@ func run() int {
 		}()
 	}
 
-	var allFindings []Finding
+	allFindings := []Finding{}
 	doneChan := make(chan bool)
 	go func() {
 		for findings := range resultsChan {
