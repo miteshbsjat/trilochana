@@ -18,7 +18,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 echo "🔨 Building Trilochana..."
-go build -o trilochana main.go || { echo "Build failed"; exit 1; }
+go build -o trilochana main.go dockerignore.go || { echo "Build failed"; exit 1; }
 
 # Setup Test Environment
 # 1. Clean previous runs

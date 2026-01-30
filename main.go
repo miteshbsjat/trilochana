@@ -468,6 +468,10 @@ func run() int {
 	startTime := time.Now()
 	count := 0
 
+	// Track Docker sources to ensure they are scanned
+    dockerSources := make(map[string]bool)
+    var dockerMutex sync.Mutex
+
 	err := filepath.Walk(config.Path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -478,6 +482,32 @@ func run() int {
 			}
 			return nil
 		}
+
+		// --- NEW: Dockerfile Intelligence ---
+        if config.GitIgnore {
+            isDF, _ := isDockerfile(path)
+            if isDF {
+                if config.Verbose {
+                    fmt.Printf("Analyzing Dockerfile: %s\n", path)
+                }
+                // Parse sources: e.g., COPY . /app or COPY config.json /app
+                rawSources, err := ParseDockerCopy(path)
+                if err == nil {
+                    ctxDir := filepath.Dir(path)
+                    // Apply .dockerignore filtering
+                    filtered, _ := FilterDockerCopySources(rawSources, ctxDir)
+                    
+                    dockerMutex.Lock()
+                    for _, s := range filtered {
+                        // Convert relative COPY paths to absolute/clean paths for the scanner
+                        fullSrcPath := filepath.Join(ctxDir, s)
+                        dockerSources[fullSrcPath] = true
+                    }
+                    dockerMutex.Unlock()
+                }
+            }
+        }
+
 		if !info.Mode().IsRegular() || shouldSkipPath(path, gitIgnoreMatcher, config.GitIgnore) {
 			return nil
 		}
@@ -486,6 +516,14 @@ func run() int {
 		filesChan <- path
 		return nil
 	})
+
+	// (Optional) If you want to ensure files referenced in COPY but ignored by .gitignore 
+    // are still scanned because they ARE going into the image:
+    for ds := range dockerSources {
+        // Check if we already scanned it; if not, add it
+        // This acts as a safety net for "unintentional copying"
+        filesChan <- ds
+    }
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

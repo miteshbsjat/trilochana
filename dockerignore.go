@@ -4,7 +4,7 @@ import (
     "bufio"
 	"bytes"
 	"fmt"
-	"log"
+	// "log"
     "os"
     "path/filepath"
     "regexp"
@@ -299,7 +299,7 @@ func FilterDockerCopySources(sources []string, contextDir string) ([]string, err
     return filtered, nil
 }
 
-
+/*
 func main() {
     // path := "./Dockerfile"
     path := "./go.mod"
@@ -338,3 +338,4 @@ func main() {
         fmt.Println(" -", s)
     }
 }
+*/
