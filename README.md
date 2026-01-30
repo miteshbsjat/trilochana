@@ -32,7 +32,7 @@ go mod init trilochana
 go mod tidy
 
 # Build the binary
-go build -o trilochana main.go
+go build -o trilochana .
 
 # (Optional) Move to your path
 sudo mv trilochana /usr/local/bin/

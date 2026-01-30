@@ -21,7 +21,7 @@ COPY . .
 # Build the binary
 # CGO_ENABLED=0 ensures a statically linked binary for portability
 # -ldflags="-s -w" strips debug information to reduce binary size
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o trilochana main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o trilochana .
 
 # -----------------------------------------------------------------------------
 # Stage 2: Runner
