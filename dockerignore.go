@@ -243,32 +243,49 @@ func NewDockerIgnoreMatcher(contextDir string) (*DockerIgnoreMatcher, error) {
 // * leading “/” is anchored to the context root
 // * “**” works as a wildcard for any number of path components
 func (m *DockerIgnoreMatcher) IsIgnored(absPath string) bool {
-    if len(m.patterns) == 0 {
-        return false
-    }
-    rel, err := filepath.Rel(m.baseDir, absPath)
-    if err != nil {
-        return false
-    }
-    rel = filepath.ToSlash(rel) // Docker always uses forward slashes
+	if len(m.patterns) == 0 {
+		return false
+	}
+	rel, err := filepath.Rel(m.baseDir, absPath)
+	if err != nil {
+		return false
+	}
+	rel = filepath.ToSlash(rel)
 
-    for _, pat := range m.patterns {
-        // Convert Docker‑ignore pattern to a Go filepath.Match pattern.
-        // The simplest way is to let filepath.Match handle *, ?, and **.
-        // We also need to treat a leading '/' as anchored to the root.
-        p := pat
-        if strings.HasPrefix(p, "/") {
-            p = strings.TrimPrefix(p, "/")
-        }
-        // "**" in Docker‑ignore works like "**" in Go's Match, so we keep it.
-        // Trailing '/' means “directory only” – we just match the path
-        // and later let the caller decide whether it is a dir.
-        matched, _ := filepath.Match(p, rel)
-        if matched {
-            return true
-        }
-    }
-    return false
+	parts := strings.Split(rel, "/")
+
+	for _, pat := range m.patterns {
+		p := strings.TrimPrefix(pat, "/")
+		isDirPattern := strings.HasSuffix(pat, "/") // Original pattern had the slash
+		cleanPat := strings.TrimSuffix(p, "/")
+
+		currentPath := ""
+		for i, part := range parts {
+			if i == 0 {
+				currentPath = part
+			} else {
+				currentPath += "/" + part
+			}
+
+			matched, _ := filepath.Match(cleanPat, currentPath)
+			if matched {
+				// If it's a directory pattern, it matches if we aren't at the last 
+				// segment of the file path, OR if the file info actually is a directory.
+				if isDirPattern {
+					// Match if the current path segment is a parent of the final file
+					if i < len(parts)-1 {
+						return true
+					}
+					// If it's the last segment, it's only a directory match if 
+					// we know it's a directory (handled by the caller or os.Stat)
+					// In this scanner context, usually hitting a parent is enough.
+					return true
+				}
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ---------- 2. Helper that filters the source list ----------

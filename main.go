@@ -484,33 +484,57 @@ func run() int {
 		}
 
 		// --- NEW: Dockerfile Intelligence ---
-        if config.GitIgnore {
-            isDF, _ := isDockerfile(path)
-            if isDF {
-                if config.Verbose {
-                    fmt.Printf("Analyzing Dockerfile: %s\n", path)
-                }
-                // Parse sources: e.g., COPY . /app or COPY config.json /app
-                rawSources, err := ParseDockerCopy(path)
-                if err == nil {
-                    ctxDir := filepath.Dir(path)
-                    // Apply .dockerignore filtering
-                    filtered, _ := FilterDockerCopySources(rawSources, ctxDir)
-                    
-                    dockerMutex.Lock()
-                    for _, s := range filtered {
-                        // Convert relative COPY paths to absolute/clean paths for the scanner
-                        fullSrcPath := filepath.Join(ctxDir, s)
-						// Logging for verbose mode
-						if config.Verbose {
-							fmt.Printf("Queuing Docker source for scan: %s\n", fullSrcPath)
+		if config.GitIgnore {
+			isDF, _ := isDockerfile(path)
+			if isDF {
+				if config.Verbose {
+					fmt.Printf("Analyzing Dockerfile: %s\n", path)
+				}
+				
+				rawSources, err := ParseDockerCopy(path)
+				if err == nil {
+					ctxDir := filepath.Dir(path)
+					
+					// Initialize the .dockerignore matcher for this context
+					dockerIgnoreMatcher, err := NewDockerIgnoreMatcher(ctxDir) //
+					if err != nil && config.Verbose {
+						fmt.Fprintf(os.Stderr, "Warning: Could not read .dockerignore in %s: %v\n", ctxDir, err)
+					}
+
+					filtered, _ := FilterDockerCopySources(rawSources, ctxDir)
+					
+					dockerMutex.Lock()
+					for _, s := range filtered {
+						fullSrcPath := filepath.Join(ctxDir, s)
+						
+						info, err := os.Stat(fullSrcPath)
+						if err == nil && info.IsDir() {
+							// Recursively walk the directory
+							filepath.Walk(fullSrcPath, func(subPath string, subInfo os.FileInfo, subErr error) error {
+								if subErr != nil || subInfo.IsDir() {
+									return nil
+								}
+								
+								// Use the local dockerIgnoreMatcher we just created
+								if dockerIgnoreMatcher == nil || !dockerIgnoreMatcher.IsIgnored(subPath) {
+									if config.Verbose && !dockerSources[subPath] {
+										fmt.Printf("Queuing recursive Docker source: %s\n", subPath)
+									}
+									dockerSources[subPath] = true
+								}
+								return nil
+							})
+						} else {
+							if config.Verbose && !dockerSources[fullSrcPath] {
+								fmt.Printf("Queuing Docker source: %s\n", fullSrcPath)
+							}
+							dockerSources[fullSrcPath] = true
 						}
-                        dockerSources[fullSrcPath] = true
-                    }
-                    dockerMutex.Unlock()
-                }
-            }
-        }
+					}
+					dockerMutex.Unlock()
+				}
+			}
+		}
 
 		if !info.Mode().IsRegular() || shouldSkipPath(path, gitIgnoreMatcher, config.GitIgnore) {
 			return nil

@@ -2,3 +2,6 @@
 /app/trilochana
 trilochana
 dockerignore
+temp.txt
+tests
+test_trilochana.sh
