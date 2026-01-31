@@ -9,10 +9,12 @@ It features parallel file scanning, entropy-based filtering, and flexible ignore
 ## ✨ Features
 
 * **🚀 High Performance**: Concurrent scanning using Go routines (worker pool pattern).
+* **🐳 Docker Intelligence**: Automatically parses `Dockerfile` and `.dockerignore` to scan files being copied into images, even if they are otherwise ignored by git `.gitignore`.
 * **🔍 Entropy Analysis**: Calculates Shannon entropy to filter out false positives (e.g., skips simple strings like `password123` while catching complex keys).
 * **🛡️ Ignore Systems**:
     * **`.gitignore`**: Automatically respects your project's existing ignore rules.
     * **`.trilochanaignore`**: Fine-grained ignoring of specific file/line combinations, with optional entropy thresholds.
+    * **`.dockerignore`**: Helps to prevent secrets getting baked into the docker image.
 * **🔧 Customizable Patterns**: Extend the built-in regex library with your own JSON configuration file or load project-specific rules via CLI.
 * **📊 Output Formats**: Supports human-readable text output and machine-readable JSON for CI/CD pipelines.
 
@@ -90,6 +92,22 @@ trilochana --format json --output secrets_report.json
 trilochana --git-ignore=false
 
 ```
+
+### 🐳 Docker-Aware Scanning
+
+Trilochana now includes "Docker Intelligence." When the `--git-ignore` flag is enabled (default), the tool performs a specialized analysis of your Docker environment:
+
+1. **Dockerfile Parsing**: It identifies `Dockerfile` or `*.Dockerfile` files and extracts all source paths from `COPY` and `ADD` instructions.
+2. **Recursive Context Discovery**: If an instruction like `COPY . /app` is found, Trilochana recursively walks the entire parent directory of the Dockerfile.
+3. **.dockerignore Filtering**: It automatically looks for a `.dockerignore` file in the same directory as the Dockerfile and respects its exclusion rules.
+4. **Safety Net**: Any file destined for your Docker image is added to the scan queue, even if it was excluded by your global `.gitignore`. This prevents unintentional leaking of secrets into production images.
+
+#### Verbose Docker Logs
+Use the `--verbose` flag to see exactly which files are being queued specifically for the Docker build context:
+```bash
+trilochana --verbose
+# Output: Analyzing Dockerfile: ./Dockerfile
+# Output: Queuing recursive Docker source: ./config/secrets.json
 
 ## ⚙️ Configuration
 
